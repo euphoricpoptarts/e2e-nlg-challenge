@@ -13,7 +13,7 @@ class RNNModel(nn.Module):
         self.vocab_size = len(mr_vocab) + len(sen_vocab)
 
         super(RNNModel, self).__init__()
-        self.hidden_dim = self.vocab_size * 2
+        self.hidden_dim = self.vocab_size // 2
         self.rnn = nn.RNN(self.vocab_size, self.hidden_dim, 10, batch_first=True)
         self.outL = nn.Linear(self.hidden_dim, self.vocab_size)
 
@@ -29,11 +29,12 @@ class RNNModel(nn.Module):
         target = mr_idx + sen_idx
         return encoding[:, :-1, :], torch.Tensor(target[1:])
 
-    def getWord(self, index, isMr):
-        if isMr:
-            return self.mr_index2word[index]
-        else:
-            return self.sen_index2word[index]
+    def getWord(self, input):
+        #-1 index for last output
+        prob = nn.functional.softmax(input[-1], dim=0)
+        # Taking the class with the highest probability score from the output
+        idx = torch.argmax(prob[self.sen_offset:]).item()
+        return self.sen_index2word[idx]
 
     def forward(self, x):
         

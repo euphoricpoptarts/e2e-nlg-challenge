@@ -6,6 +6,8 @@ from collections import Counter, deque
 from rnnModel import RNNModel
 import torch
 from torch import nn
+from math import ceil
+import numpy as np
 
 nltk.download('stopwords')
 nltk.download('punkt')
@@ -80,6 +82,34 @@ def preprocess(file):
 
     return padded_dataset, list(mr_vocab), list(sen_vocab)
 
+def batch_data(prebatched, minibatch):
+    batched = []
+    inputs = [x[0] for x in prebatched]
+    targets = [x[1] for x in prebatched]
+    size = len(prebatched)
+    for i in range(0, size, minibatch):
+        end_idx = min(size, i + minibatch)
+        input_batch = torch.cat(inputs[i:end_idx], 0)
+        target_batch = torch.cat(targets[i:end_idx], 0)
+        batched.append((input_batch, target_batch))
+    return batched
+
+def predictWord(model, mr_list, sen_list):
+    
+    input, _ = model.onehot((mr_list, sen_list))
+
+    input = input.to("cuda:0")
+    
+    out, hidden = model(input)
+
+    return model.getWord(out)
+
+def predictSentence(model, mr_list):
+    sen = []
+    for i in range(20):
+        sen.append(predictWord(model, mr_list, sen))
+    return ' '.join(sen)
+
 def train(dataset, mr_vocab, sen_vocab):
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
@@ -92,40 +122,51 @@ def train(dataset, mr_vocab, sen_vocab):
     
     # Define hyperparameters
     n_epochs = 100
-    lr=0.01
+    lr=0.0001
 
     # Define Loss, Optimizer
     loss_f = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     prebatched = list(map(model.onehot, dataset))
-    size = len(prebatched)
-    print(size)
-    minibatch = 10
+    np.random.shuffle(prebatched)
+    minibatch = 32
 
-    batched = []
-    inputs = [x[0] for x in prebatched]
-    targets = [x[1] for x in prebatched]
-    for i in range(0, size, minibatch):
-        end_idx = min(size, i + minibatch)
-        input_batch = torch.cat(inputs[i:end_idx], 0)
-        target_batch = torch.cat(targets[i:end_idx], 0)
-        batched.append((input_batch, target_batch))
+    batched = batch_data(prebatched, minibatch)
+    batched_size = len(batched)
+    train_size = int(ceil(batched_size*0.8))
+
+    train_batch = batched[0:train_size]
+    test_batch = batched[train_size:batched_size]
 
     #save memory
-    inputs.clear()
-    targets.clear()
     prebatched.clear()
+    batched.clear()
 
     for i in range(n_epochs):
-        total_loss = 0
-        for input, target in batched:
+        total_train_loss = 0
+        total_test_loss = 0
+        for input, target in train_batch:
             input = input.to(device)
             target = target.to(device)
             optimizer.zero_grad()
             output, hidden = model(input)
             loss = loss_f(output, target.long())
-            total_loss += loss.item()
+            total_train_loss += loss.item()
             loss.backward()
             optimizer.step()
-        print("Epoch: {}, Loss: {}".format(i, total_loss))
+        with torch.no_grad():
+            for input, target in test_batch:
+                input = input.to(device)
+                target = target.to(device)
+                output, hidden = model(input)
+                loss = loss_f(output, target.long())
+                total_test_loss += loss.item()
+        print("Epoch: {}, Training Loss: {}, Testing Loss: {}".format(i, total_train_loss, total_test_loss))
+        if total_train_loss < 250:
+            for p in optimizer.param_groups:
+                p['lr'] = 0.00005
+        elif total_train_loss < 100:
+            for p in optimizer.param_groups:
+                p['lr'] = 0.000025
+    return model
