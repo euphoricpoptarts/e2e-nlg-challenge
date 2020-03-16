@@ -61,6 +61,8 @@ def preprocess(file):
                     sen = sen.replace(mr_dict['near'], near_token)
                 mr_list = word_tokenize(mr_sen)
                 sen_list = word_tokenize(sen)
+                mr_list = list(map(lambda x: x.lower(), mr_list))
+                sen_list = list(map(lambda x: x.lower(), sen_list))
                 sen_list.append(sen_end_token)
                 mr_vocab.update(set(mr_list))
                 sen_vocab.update(set(sen_list))
@@ -94,6 +96,8 @@ def batch_data(prebatched, minibatch):
         batched.append((input_batch, target_batch))
     return batched
 
+B = 10
+
 def predictWord(model, mr_list, sen_list):
     
     input, _ = model.onehot((mr_list, sen_list))
@@ -102,15 +106,32 @@ def predictWord(model, mr_list, sen_list):
     
     out, hidden = model(input)
 
-    return model.getWord(out)
+    return model.getTopWords(out, B)
 
 def predictSentence(model, mr_list):
-    sen = []
+    """Beam search"""
+    frontier = [{
+        'prob': 1.0,
+        'sen': []
+        }]
     for i in range(20):
-        sen.append(predictWord(model, mr_list, sen))
-    return ' '.join(sen)
+        nextFrontier = []
+        for f in frontier:
+            for word, prob in predictWord(model, mr_list, f['sen']):
+                potential = {}
+                potential['sen'] = f['sen'] + [word]
+                potential['prob'] = f['prob']*prob
+                nextFrontier.append(potential)
+        nextFrontier.sort(key=lambda x: x['prob'], reverse=True)
+        if i == 0:
+            print(nextFrontier)
+        if len(nextFrontier) > B:
+            frontier = nextFrontier[:B]
+        else:
+            frontier = nextFrontier
+    return ' '.join(frontier[0]['sen'])
 
-def train(dataset, mr_vocab, sen_vocab):
+def train(dataset, mr_vocab, sen_vocab, n_epochs):
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
         print("Using GPU")
@@ -121,7 +142,6 @@ def train(dataset, mr_vocab, sen_vocab):
     model = RNNModel(mr_vocab, sen_vocab, device).to(device)
     
     # Define hyperparameters
-    n_epochs = 100
     lr=0.0001
 
     # Define Loss, Optimizer
@@ -163,10 +183,10 @@ def train(dataset, mr_vocab, sen_vocab):
                 loss = loss_f(output, target.long())
                 total_test_loss += loss.item()
         print("Epoch: {}, Training Loss: {}, Testing Loss: {}".format(i, total_train_loss, total_test_loss))
-        if total_train_loss < 250:
-            for p in optimizer.param_groups:
-                p['lr'] = 0.00005
-        elif total_train_loss < 100:
-            for p in optimizer.param_groups:
-                p['lr'] = 0.000025
+        #if total_train_loss < 100:
+        #    for p in optimizer.param_groups:
+        #        p['lr'] = 0.00005
+        #elif total_train_loss < 100:
+        #    for p in optimizer.param_groups:
+        #        p['lr'] = 0.000025
     return model
